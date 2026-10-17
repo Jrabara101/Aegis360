@@ -1,0 +1,13 @@
+{
+  "name": "Grandparent scam call",
+  "caller_last4": "0199",
+  "caller_is_trusted": false,
+  "claimed_identity": null,
+  "chunks": [
+    "Hello? Grandma? It's me, your grandson.",
+    "I got in a car accident and they took me to jail. I need [AMOUNT] for bail today.",
+    "Please don't tell Mom, she'll be so upset. Can you go to the store and get it right now?"
+  ],
+  "senior_answers_wrong": ["Um, is it sunshine?", "I don't remember. Daisy?"],
+  "senior_answers_right": ["Blue pelican"]
+}
