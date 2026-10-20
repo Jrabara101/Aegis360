@@ -1,0 +1,69 @@
+{
+  "scenario_name": "Living Room Hard Fall with Immobility",
+  "description": "Senior walks in living room, suffers high-impact slip/fall (4.23g breach), remains immobile on floor.",
+  "senior_id": "snr_8832_v",
+  "device_id": "esp32_hub_01",
+  "expected_anomaly": "IMPACT_VECTOR_DETECTED",
+  "frames": [
+    {
+      "step": 1,
+      "phase": "normal_walking",
+      "delay_seconds": 1.0,
+      "location": "living_room",
+      "accelerometer": { "x_g": 0.08, "y_g": 0.12, "z_g": 1.02, "vector_magnitude_g": 1.03 },
+      "pir_motion_detected": true
+    },
+    {
+      "step": 2,
+      "phase": "normal_walking",
+      "delay_seconds": 1.0,
+      "location": "living_room",
+      "accelerometer": { "x_g": -0.05, "y_g": 0.15, "z_g": 0.98, "vector_magnitude_g": 0.99 },
+      "pir_motion_detected": true
+    },
+    {
+      "step": 3,
+      "phase": "freefall_drop",
+      "delay_seconds": 0.5,
+      "location": "living_room",
+      "accelerometer": { "x_g": 0.12, "y_g": 0.18, "z_g": 0.35, "vector_magnitude_g": 0.41 },
+      "pir_motion_detected": true
+    },
+    {
+      "step": 4,
+      "phase": "violent_impact",
+      "delay_seconds": 0.2,
+      "location": "living_room",
+      "accelerometer": { "x_g": 2.45, "y_g": 1.95, "z_g": 2.85, "vector_magnitude_g": 4.23 },
+      "pir_motion_detected": true,
+      "peak_g_breach": true
+    },
+    {
+      "step": 5,
+      "phase": "post_impact_immobility_1",
+      "delay_seconds": 1.0,
+      "location": "living_room",
+      "accelerometer": { "x_g": 0.97, "y_g": 0.02, "z_g": 0.02, "vector_magnitude_g": 0.97 },
+      "pir_motion_detected": false,
+      "immobility_duration_sec": 5
+    },
+    {
+      "step": 6,
+      "phase": "post_impact_immobility_2",
+      "delay_seconds": 1.0,
+      "location": "living_room",
+      "accelerometer": { "x_g": 0.97, "y_g": 0.01, "z_g": 0.02, "vector_magnitude_g": 0.97 },
+      "pir_motion_detected": false,
+      "immobility_duration_sec": 10
+    },
+    {
+      "step": 7,
+      "phase": "post_impact_immobility_confirmed",
+      "delay_seconds": 1.0,
+      "location": "living_room",
+      "accelerometer": { "x_g": 0.98, "y_g": 0.02, "z_g": 0.01, "vector_magnitude_g": 0.98 },
+      "pir_motion_detected": false,
+      "immobility_duration_sec": 15
+    }
+  ]
+}
