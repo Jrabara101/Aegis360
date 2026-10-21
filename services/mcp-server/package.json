@@ -1,0 +1,16 @@
+{
+  "name": "@aegiscare/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AegisCare Alexa+ MCP server (spec 2025-11-25, Streamable HTTP)",
+  "dependencies": {
+    "@aegiscare/aws": "0.1.0",
+    "@aegiscare/core": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.150"
+  }
+}

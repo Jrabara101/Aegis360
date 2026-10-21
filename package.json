@@ -1,0 +1,29 @@
+{
+  "name": "aegiscare-360",
+  "private": true,
+  "type": "module",
+  "description": "AegisCare 360 — multi-agent family defense network (Amazon Developer Hackathon)",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "infra"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "tsx scripts/demo-scam-call.ts",
+    "mcp:dev": "tsx services/mcp-server/src/local.ts",
+    "synth": "npm run synth -w infra"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@aegiscare/agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bedrock agent invokers: Inbound Threat and Caregiver Coordination",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aegiscare/aws": "0.1.0",
+    "@aegiscare/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.150"
+  }
+}
