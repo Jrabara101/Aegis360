@@ -29,6 +29,13 @@ from typing import Optional, Dict, Any
 
 from telemetry_generator import TelemetryGenerator
 
+# Ensure UTF-8 support on Windows console
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Try importing AWSIoTPythonSDK
 try:
     from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
@@ -180,7 +187,7 @@ class SensorSimulator:
             print(json.dumps(payload, indent=2))
 
         if eb_event:
-            print(f"\n{Color.MAGENTA}{Color.BOLD}⚡ EventBridge 'AegisCareBus' Event Dispatched (For Safety Agent):{Color.RESET}")
+            print(f"\n{Color.MAGENTA}{Color.BOLD}>> [EVENTBRIDGE] EventBridge 'AegisCareBus' Event Dispatched (For Safety Agent):{Color.RESET}")
             print(f"{Color.MAGENTA}{json.dumps(eb_event, indent=2)}{Color.RESET}")
 
         print("-" * 65)
