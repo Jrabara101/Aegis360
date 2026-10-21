@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
 AegisCare 360 - DynamoDB Setup & Seed Script
-Provisions tables (Seniors, TrustedContacts, ScamLogs, ActivityEvents)
+Provisions all 6 core tables defined in infra/lib/data.ts:
+  - Seniors
+  - Caregivers
+  - TrustedContacts
+  - Incidents
+  - Events
+  - Alerts
 and seeds initial test data with KMS encrypted passphrases and phone numbers.
 """
 
 import os
 import sys
 import json
+import time
 import argparse
 from typing import Dict, Any
 
@@ -24,7 +31,7 @@ except ImportError:
 
 
 def create_tables(dynamodb, schema_path: str):
-    """Creates tables specified in tables_definition.json."""
+    """Creates tables specified in tables_definition.json matching infra/lib/data.ts."""
     with open(schema_path, "r") as f:
         config = json.load(f)
 
@@ -55,89 +62,119 @@ def create_tables(dynamodb, schema_path: str):
 
 
 def seed_demo_data(dynamodb, kms_service: KMSSecurityService):
-    """Seeds initial demonstration data with encrypted sensitive fields."""
-    print("\n[DynamoDB] Seeding demonstration data with KMS encrypted fields...")
+    """Seeds initial demonstration data across the 6 core tables."""
+    print("\n[DynamoDB] Seeding demonstration data across 6 tables with KMS encrypted fields...")
 
-    # 1. Senior Profile
-    seniors_table = dynamodb.Table("AegisCare_Seniors")
+    raw_passphrase = "BlueberryPancake"
+    raw_phone = "+1-512-555-0199"
+    enc_passphrase = kms_service.encrypt_field(raw_passphrase, {"senior_id": "snr_8832_v", "field": "passphrase"})
+    enc_phone = kms_service.encrypt_field(raw_phone, {"senior_id": "snr_8832_v", "field": "phone_number"})
+
+    # 1. Seniors Table
+    seniors_table = dynamodb.Table("Seniors")
     senior_item = {
         "senior_id": "snr_8832_v",
-        "full_name": "Eleanor Vance",
-        "age": 82,
-        "address": "452 Willow Creek Rd, Austin, TX",
-        "emergency_status": "NORMAL",
+        "name": "Eleanor Vance",
+        "timezone": "America/Chicago",
+        "status": "NORMAL",
+        "safe_word_hash": enc_passphrase,
+        "last_activity_at": "2026-10-21T13:00:00Z",
         "baseline_schedule": {
             "wake_time": "07:30",
             "kitchen_expected_by": "10:00",
             "evening_bedtime": "22:00"
         },
-        "assigned_caregivers": ["usr_cg_101"],
         "created_at": "2026-10-12T00:00:00Z",
-        "updated_at": "2026-10-17T16:00:00Z",
+        "updated_at": "2026-10-21T13:00:00Z",
     }
     seniors_table.put_item(Item=senior_item)
     print("  ✓ Seeded Senior profile: Eleanor Vance (ID: snr_8832_v)")
 
-    # 2. Trusted Contacts with Encrypted Passphrase & Phone
-    contacts_table = dynamodb.Table("AegisCare_TrustedContacts")
-    raw_passphrase = "BlueberryPancake"
-    raw_phone = "+1-512-555-0199"
-
-    enc_passphrase = kms_service.encrypt_field(raw_passphrase, {"senior_id": "snr_8832_v", "field": "passphrase"})
-    enc_phone = kms_service.encrypt_field(raw_phone, {"senior_id": "snr_8832_v", "field": "phone_number"})
-
-    contact_item = {
-        "contact_id": "cnt_9901",
+    # 2. Caregivers Table
+    caregivers_table = dynamodb.Table("Caregivers")
+    caregiver_item = {
+        "caregiver_id": "cg_101",
         "senior_id": "snr_8832_v",
         "name": "Sarah Vance",
         "relationship": "Daughter",
+        "priority": 1,
+        "phone_number_encrypted": enc_phone,
+    }
+    caregivers_table.put_item(Item=caregiver_item)
+    print("  ✓ Seeded Caregiver: Sarah Vance (ID: cg_101, by_senior: snr_8832_v)")
+
+    # 3. Trusted Contacts Table
+    contacts_table = dynamodb.Table("TrustedContacts")
+    contact_item = {
+        "senior_id": "snr_8832_v",
+        "contact_id": "cnt_9901",
+        "name": "Sarah Vance",
+        "relationship": "Daughter",
+        "phone_hash": "hash_phone_5125550199",
         "phone_number_encrypted": enc_phone,
         "family_passphrase_encrypted": enc_passphrase,
-        "notification_tier": 1,
-        "is_emergency_proxy": True,
-        "created_at": "2026-10-12T00:00:00Z",
     }
     contacts_table.put_item(Item=contact_item)
-    print(f"  ✓ Seeded Trusted Contact: Sarah Vance (Daughter) with KMS Encrypted Passphrase")
+    print("  ✓ Seeded Trusted Contact: Sarah Vance with KMS encrypted passphrase & phone")
 
-    # 3. Sample Scam Log
-    scam_table = dynamodb.Table("AegisCare_ScamLogs")
-    scam_item = {
-        "log_id": "slog_20261017_001",
+    # 4. Incidents Table
+    incidents_table = dynamodb.Table("Incidents")
+    incident_item = {
         "senior_id": "snr_8832_v",
-        "timestamp": "2026-10-17T14:32:10Z",
-        "caller_id": "+18005550199",
-        "threat_score": 0.92,
-        "detected_vectors": [
-            "VOICE_CLONE_CONFIRMED",
-            "URGENT_WIRE_TRANSFER_DEMAND"
-        ],
-        "action_taken": "CALL_TERMINATED_AND_CAREGIVER_ALERTED",
-        "raw_telemetry_ref": "s3://aegiscare-telemetry-logs/2026/10/17/call-98765.json",
+        "opened_at#incident_id": "2026-10-21T13:19:43Z#inc_fall_8832_01",
+        "incident_id": "inc_fall_8832_01",
+        "kind": "FALL",
+        "status": "OPEN",
+        "severity": "CRITICAL",
+        "title": "Fall impact detected in living room",
+        "opened_at": "2026-10-21T13:19:43Z",
     }
-    scam_table.put_item(Item=scam_item)
-    print("  ✓ Seeded baseline Scam Log: slog_20261017_001")
+    incidents_table.put_item(Item=incident_item)
+    print("  ✓ Seeded Incident: inc_fall_8832_01 (FALL, CRITICAL)")
 
-    # 4. Activity Events
-    activity_table = dynamodb.Table("AegisCare_ActivityEvents")
-    activity_item = {
+    # 5. Events Table
+    events_table = dynamodb.Table("Events")
+    now_ts = int(time.time())
+    event_item = {
+        "incident_id": "inc_fall_8832_01",
+        "occurred_at#event_id": "2026-10-21T13:19:43Z#evt_fall_001",
+        "schema_version": "1",
+        "event_id": "evt_fall_001",
         "senior_id": "snr_8832_v",
-        "timestamp": "2026-10-17T07:30:00Z",
-        "event_id": "evt_init_001",
-        "event_type": "NORMAL_MOTION",
-        "location": "bedroom",
-        "g_force": 1.02,
-        "immobility_detected": False,
-        "processed_by": "aegiscare.iot.dsp",
+        "occurred_at": "2026-10-21T13:19:43Z",
+        "correlation_id": "corr_8832_01",
+        "demo": True,
+        "device_id": "esp32_hub_01",
+        "room": "living_room",
+        "anomaly_type": "FALL_IMPACT",
+        "metrics": {"impact_g": 4.23},
+        "baseline": {"impact_threshold_g": 3.0},
+        "ttl": now_ts + 30 * 24 * 3600,
     }
-    activity_table.put_item(Item=activity_item)
-    print("  ✓ Seeded initial Activity Event: evt_init_001")
-    print("[DynamoDB] Seeding completed successfully!\n")
+    events_table.put_item(Item=event_item)
+    print("  ✓ Seeded Event: evt_fall_001 (FALL_IMPACT, impact_g: 4.23)")
+
+    # 6. Alerts Table
+    alerts_table = dynamodb.Table("Alerts")
+    alert_item = {
+        "alert_id": "alr_init_001",
+        "incident_id": "inc_fall_8832_01",
+        "priority": "P1",
+        "channels": ["PUSH", "SMS"],
+        "title": "Urgent: Fall Detected",
+        "body": "Eleanor has experienced a 4.23g fall impact in the living room.",
+        "requires_ack": True,
+        "ack_deadline": None,
+    }
+    alerts_table.put_item(Item=alert_item)
+    print("  ✓ Seeded Alert: alr_init_001 (Priority P1)")
+
+    print("[DynamoDB] Seeding completed successfully across all 6 tables!\n")
 
 
 def run_mock_seeding(kms_service: KMSSecurityService):
     """Outputs demo table records to console/JSON in offline mode."""
-    print("\n[MOCK MODE] Simulating DynamoDB provisioning and KMS encryption:")
+    print("\n[MOCK MODE] Simulating 6-Table DynamoDB provisioning and KMS encryption:")
     raw_passphrase = "BlueberryPancake"
     raw_phone = "+1-512-555-0199"
 
@@ -152,11 +189,17 @@ def run_mock_seeding(kms_service: KMSSecurityService):
     print(f"  KMS Encrypted:        '{enc_phone}'")
     print(f"  Decrypted Plaintext:  '{kms_service.decrypt_field(enc_phone)}'\n")
 
-    print("[MOCK MODE] Tables: AegisCare_Seniors, AegisCare_TrustedContacts, AegisCare_ScamLogs, AegisCare_ActivityEvents")
+    print("[MOCK MODE] 6 Tables from infra/lib/data.ts:")
+    print("  1. Seniors (PK: senior_id)")
+    print("  2. Caregivers (PK: caregiver_id, GSI: by_senior)")
+    print("  3. TrustedContacts (PK: senior_id, SK: contact_id, GSI: by_phone_hash)")
+    print("  4. Incidents (PK: senior_id, SK: opened_at#incident_id, GSIs: by_incident, by_status)")
+    print("  5. Events (PK: incident_id, SK: occurred_at#event_id, TTL: ttl)")
+    print("  6. Alerts (PK: alert_id, GSI: by_incident)")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AegisCare 360 - Provision DynamoDB and KMS")
+    parser = argparse.ArgumentParser(description="AegisCare 360 - Provision 6 DynamoDB Tables and KMS")
     parser.add_argument("--region", default="us-east-1", help="AWS Region (default: us-east-1)")
     parser.add_argument("--endpoint-url", default=None, help="Custom DynamoDB endpoint (e.g. http://localhost:8000)")
     parser.add_argument("--kms-key-id", default=None, help="AWS KMS Key ID or Alias ARN")

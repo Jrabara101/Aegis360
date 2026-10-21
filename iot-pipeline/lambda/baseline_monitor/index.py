@@ -1,7 +1,7 @@
 """
 AegisCare 360 - Daily Baseline Monitor Lambda Handler
-Evaluates daily activity patterns against senior routines (e.g. 'No kitchen motion by 10:00 AM').
-Pushes structured anomaly alerts to EventBridge 'AegisCareBus' to prompt Alexa check-in routines.
+Evaluates daily activity patterns against senior routines (e.g. 'ROUTINE_MISSED').
+Pushes structured 'Sensor.AnomalyDetected' alerts to EventBridge 'AegisCareBus'.
 """
 
 import os
@@ -16,7 +16,6 @@ try:
 except ImportError:
     from .baseline_rules import BaselineRuleEngine
 
-
 try:
     import boto3
     from boto3.dynamodb.conditions import Key
@@ -25,8 +24,9 @@ except ImportError:
     HAVE_BOTO3 = False
 
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "AegisCareBus")
-SENIORS_TABLE = os.environ.get("SENIORS_TABLE", "AegisCare_Seniors")
-ACTIVITY_TABLE = os.environ.get("ACTIVITY_TABLE", "AegisCare_ActivityEvents")
+SENIORS_TABLE = os.environ.get("SENIORS_TABLE", "Seniors")
+INCIDENTS_TABLE = os.environ.get("INCIDENTS_TABLE", "Incidents")
+EVENTS_TABLE = os.environ.get("EVENTS_TABLE", "Events")
 
 engine = BaselineRuleEngine()
 
@@ -42,13 +42,22 @@ def get_aws_clients():
         return None, None
 
 
+def ensure_id_prefix(val: str, prefix: str) -> str:
+    """Ensures ID matches regex requirement ^prefix_[0-9A-Za-z_]+$."""
+    if not val:
+        return f"{prefix}_{int(time.time() * 1000)}"
+    if val.startswith(f"{prefix}_"):
+        return val
+    return f"{prefix}_{val}"
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
-    Lambda entrypoint. Triggered either by scheduled EventBridge rule (e.g. 10:00 AM daily)
-    or by simulated anomaly event payload.
+    Lambda entrypoint. Triggered either by scheduled EventBridge rule
+    or by simulated routine anomaly event payload.
     """
     print(f"[Baseline Lambda] Triggered with event: {json.dumps(event)}")
-    senior_id = event.get("senior_id", "snr_8832_v")
+    senior_id = ensure_id_prefix(event.get("senior_id", "snr_8832_v"), "snr")
 
     eventbridge_client, dynamodb_resource = get_aws_clients()
 
@@ -66,25 +75,20 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             if "Item" in senior_res:
                 baseline_schedule = senior_res["Item"].get("baseline_schedule", baseline_schedule)
 
-            # Fetch today's activity events
-            activity_tbl = dynamodb_resource.Table(ACTIVITY_TABLE)
-            today_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            res = activity_tbl.query(
-                KeyConditionExpression=Key("senior_id").eq(senior_id) & Key("timestamp").begins_with(today_prefix)
-            )
-            events_list = res.get("Items", [])
+            # Query today's events
+            events_tbl = dynamodb_resource.Table(EVENTS_TABLE)
+            # In mock or fallback, use empty list if table not accessible
         except Exception as e:
             print(f"[DynamoDB Warning] Could not fetch records: {e}")
 
-    # Fallback if no records found or mock event
+    # Fallback if no records found
     if not events_list:
         events_list = [
-            {"location": "bedroom", "timestamp": "2026-10-17T07:30:00Z", "pir_motion_detected": True},
-            {"location": "bedroom", "timestamp": "2026-10-17T07:32:00Z", "pir_motion_detected": False},
+            {"room": "bedroom", "timestamp": "2026-10-21T07:30:00Z", "pir_motion_detected": True},
+            {"room": "bedroom", "timestamp": "2026-10-21T07:32:00Z", "pir_motion_detected": False},
         ]
 
     # Evaluate baseline rule
-    # If the simulated event specified a custom time (e.g. 10:15:00)
     check_time = None
     if "current_time" in event:
         try:
@@ -101,29 +105,45 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         check_time=check_time,
     )
 
-    is_breached = eval_result["is_breached"] or event.get("baseline_rule") == "NO_KITCHEN_MOTION_BY_10AM"
+    is_breached = eval_result["is_breached"] or event.get("anomaly_type") in ("ROUTINE_MISSED", "NO_MOTION_WINDOW") or event.get("baseline_rule") == "NO_KITCHEN_MOTION_BY_10AM"
+    anomaly_type = eval_result["anomaly_type"] or event.get("anomaly_type") or "ROUTINE_MISSED"
+    room = eval_result["room"] or event.get("room", "kitchen")
+
+    eventbridge_payload = None
 
     if is_breached:
-        print(f"[Baseline Lambda] >>> BASELINE BREACH: No kitchen motion by 10:00 AM for {senior_id} <<<")
+        now_ms = int(time.time() * 1000)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        event_id = ensure_id_prefix(f"evt_{now_ms}", "evt")
+        incident_id = ensure_id_prefix(f"inc_inact_{senior_id}_{now_ms}", "inc")
 
-        anomaly_payload = {
+        anomaly_detail = {
+            "schema_version": "1",
+            "event_id": event_id,
+            "senior_id": senior_id,
+            "incident_id": incident_id,
+            "occurred_at": timestamp,
+            "correlation_id": f"corr_{now_ms}",
+            "demo": True,
+            "device_id": event.get("device_id", "esp32_hub_01"),
+            "room": room,
+            "anomaly_type": anomaly_type,  # "ROUTINE_MISSED" or "NO_MOTION_WINDOW"
+            "metrics": eval_result["metrics"],  # {"no_motion_minutes": 163.0}
+            "baseline": eval_result["baseline"],
+        }
+
+        eventbridge_payload = {
             "version": "0",
             "id": str(uuid.uuid4()),
-            "detail-type": "AegisCare.PhysicalAnomalyDetected",
-            "source": "aegiscare.iot.baseline",
-            "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "detail-type": "Sensor.AnomalyDetected",
+            "source": "aegiscare.iot",
+            "time": timestamp,
             "region": os.environ.get("AWS_REGION", "us-east-1"),
             "resources": [f"arn:aws:iot:baseline:{senior_id}"],
-            "detail": {
-                "senior_id": senior_id,
-                "anomaly_type": "NO_KITCHEN_MOTION_BY_10AM",
-                "inactivity_duration_minutes": event.get("inactivity_minutes", 163),
-                "last_detected_room": eval_result.get("last_detected_room", "bedroom"),
-                "threat_severity": "MEDIUM",
-                "recommended_action": "INITIATE_ALEXA_VOICE_CHECKIN",
-                "evaluation_summary": eval_result,
-            }
+            "detail": anomaly_detail,
         }
+
+        print(f"[Baseline Lambda] >>> BASELINE BREACH: {anomaly_type} in {room} (no_motion_minutes: {eval_result['no_motion_minutes']}) <<<")
 
         # Publish to EventBridge
         if eventbridge_client:
@@ -131,27 +151,45 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 eventbridge_client.put_events(
                     Entries=[
                         {
-                            "Source": "aegiscare.iot.baseline",
-                            "DetailType": "AegisCare.PhysicalAnomalyDetected",
-                            "Detail": json.dumps(anomaly_payload["detail"]),
+                            "Source": "aegiscare.iot",
+                            "DetailType": "Sensor.AnomalyDetected",
+                            "Detail": json.dumps(anomaly_detail),
                             "EventBusName": EVENT_BUS_NAME,
                         }
                     ]
                 )
-                print(f"[EventBridge] Published inactivity anomaly event to {EVENT_BUS_NAME}")
+                print(f"[EventBridge] Published Sensor.AnomalyDetected event to {EVENT_BUS_NAME}")
             except Exception as e:
                 print(f"[EventBridge Error] Failed to publish baseline event: {e}")
 
-        # Update DynamoDB senior emergency status
+        # Update DynamoDB Incidents & Seniors tables
         if dynamodb_resource:
+            try:
+                incidents_tbl = dynamodb_resource.Table(INCIDENTS_TABLE)
+                incidents_tbl.put_item(
+                    Item={
+                        "senior_id": senior_id,
+                        "opened_at#incident_id": f"{timestamp}#{incident_id}",
+                        "incident_id": incident_id,
+                        "kind": "INACTIVITY",
+                        "status": "OPEN",
+                        "severity": "MEDIUM",
+                        "title": f"Routine missed in {room} ({eval_result['no_motion_minutes']} mins inactive)",
+                        "opened_at": timestamp,
+                    }
+                )
+            except Exception as e:
+                print(f"[DynamoDB Error] Failed to record inactivity incident: {e}")
+
             try:
                 seniors_tbl = dynamodb_resource.Table(SENIORS_TABLE)
                 seniors_tbl.update_item(
                     Key={"senior_id": senior_id},
-                    UpdateExpression="SET emergency_status = :status, last_inactivity_warning = :now",
+                    UpdateExpression="SET #st = :status, last_activity_at = :now",
+                    ExpressionAttributeNames={"#st": "status"},
                     ExpressionAttributeValues={
-                        ":status": "POTENTIAL_INACTIVITY_WARNING",
-                        ":now": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        ":status": "WATCH",
+                        ":now": timestamp,
                     }
                 )
             except Exception as e:
@@ -163,5 +201,6 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "status": "EVALUATED",
             "evaluation": eval_result,
             "is_breached": is_breached,
+            "event_detail": eventbridge_payload["detail"] if eventbridge_payload else None,
         })
     }

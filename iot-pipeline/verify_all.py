@@ -2,6 +2,12 @@
 """
 AegisCare 360 - Comprehensive Verification & Health Check Script
 Performs end-to-end verification of all Role 3 components before committing to GitHub.
+Conforms to infra/lib/data.ts (6 DynamoDB tables) and packages/core/src/events.ts:
+  - Tables: Seniors, Caregivers, TrustedContacts, Incidents, Events, Alerts
+  - Events: Sensor.AnomalyDetected
+  - Anomaly Types: FALL_IMPACT, POST_IMPACT_IMMOBILITY, ROUTINE_MISSED, NO_MOTION_WINDOW
+  - Exact Metric Names: impact_g, immobile_seconds, no_motion_minutes
+  - Key Fields: room, baseline
 """
 
 import sys
@@ -94,20 +100,20 @@ def main():
     else:
         fail_step("Decrypted value does not match original plaintext!")
 
-    # Step 4: Verify DynamoDB Schema Definition
-    check_step(4, "Verifying DynamoDB Tables & Indexes Definition")
+    # Step 4: Verify 6 DynamoDB Tables Definition (matching infra/lib/data.ts)
+    check_step(4, "Verifying 6 DynamoDB Tables & Key Schemas (infra/lib/data.ts)")
     schema_path = os.path.join(os.path.dirname(__file__), "database", "schema", "tables_definition.json")
     with open(schema_path, "r") as f:
         schema_data = json.load(f)
-    expected_tables = {"AegisCare_Seniors", "AegisCare_TrustedContacts", "AegisCare_ScamLogs", "AegisCare_ActivityEvents"}
+    expected_tables = {"Seniors", "Caregivers", "TrustedContacts", "Incidents", "Events", "Alerts"}
     found_tables = {t["TableName"] for t in schema_data.get("tables", [])}
     if expected_tables.issubset(found_tables):
-        pass_step(f"All 4 core DynamoDB tables defined with KMS SSE & GSIs: {found_tables}")
+        pass_step(f"All 6 DynamoDB tables defined matching infra/lib/data.ts: {found_tables}")
     else:
         fail_step(f"Missing tables! Expected: {expected_tables}, Found: {found_tables}")
 
-    # Step 5: Test DSP Signal Processing & Fall Detection
-    check_step(5, "Verifying Real-Time DSP Signal Processing")
+    # Step 5: Test DSP Signal Processing & Fall Detection (FALL_IMPACT)
+    check_step(5, "Verifying Real-Time DSP Signal Processing (FALL_IMPACT & impact_g)")
     import importlib
     dsp_math_mod = importlib.import_module("lambda.dsp_processor.dsp_math")
     DSPProcessor = dsp_math_mod.DSPProcessor
@@ -116,35 +122,36 @@ def main():
     # Test Impact Vector Breach (4.23g)
     test_frame = {
         "senior_id": "snr_8832_v",
+        "room": "living_room",
         "location": "living_room",
         "accelerometer": {"x_g": 2.45, "y_g": 1.95, "z_g": 2.85, "vector_magnitude_g": 4.23},
         "pir_motion_detected": True,
     }
     result = dsp.evaluate_telemetry_frame(test_frame)
-    if result["is_fall_impact"] and result["status"] == "IMPACT_VECTOR_DETECTED":
-        pass_step(f"Threshold breach correctly identified: {result['vector_magnitude_g']}g >= 3.0g [CRITICAL].")
+    if result["is_fall_impact"] and result["anomaly_type"] == "FALL_IMPACT" and result["impact_g"] == 4.23:
+        pass_step(f"Threshold breach correctly identified: anomaly_type='FALL_IMPACT', impact_g={result['impact_g']} >= 3.0g in room='{result['room']}'.")
     else:
         fail_step(f"DSP failed to detect high impact: {result}")
 
-    # Step 6: Test Daily Baseline Anomaly Engine
-    check_step(6, "Verifying Daily Routine Baseline Engine")
+    # Step 6: Test Daily Baseline Anomaly Engine (ROUTINE_MISSED & no_motion_minutes)
+    check_step(6, "Verifying Daily Routine Baseline Engine (ROUTINE_MISSED & no_motion_minutes)")
     baseline_mod = importlib.import_module("lambda.baseline_monitor.baseline_rules")
     BaselineRuleEngine = baseline_mod.BaselineRuleEngine
     baseline = BaselineRuleEngine()
 
     mock_events = [
-        {"location": "bedroom", "timestamp": "2026-10-17T07:30:00Z", "pir_motion_detected": True},
-        {"location": "bedroom", "timestamp": "2026-10-17T07:32:00Z", "pir_motion_detected": False},
+        {"room": "bedroom", "timestamp": "2026-10-21T07:30:00Z", "pir_motion_detected": True},
+        {"room": "bedroom", "timestamp": "2026-10-21T07:32:00Z", "pir_motion_detected": False},
     ]
     # Check at 10:15 AM (past 10:00 AM cutoff)
-    cutoff_time = datetime(2026, 10, 17, 10, 15, 0, tzinfo=timezone.utc)
+    cutoff_time = datetime(2026, 10, 21, 10, 15, 0, tzinfo=timezone.utc)
     base_res = baseline.evaluate_inactivity("snr_8832_v", mock_events, check_time=cutoff_time)
-    if base_res["is_breached"] and base_res["recommended_action"] == "INITIATE_ALEXA_VOICE_CHECKIN":
-        pass_step("Inactivity anomaly flagged: 'NO_KITCHEN_MOTION_BY_10AM' -> triggers voice check-in.")
+    if base_res["is_breached"] and base_res["anomaly_type"] == "ROUTINE_MISSED" and "no_motion_minutes" in base_res["metrics"]:
+        pass_step(f"Inactivity anomaly flagged: anomaly_type='ROUTINE_MISSED', room='{base_res['room']}', no_motion_minutes={base_res['metrics']['no_motion_minutes']}.")
     else:
         fail_step(f"Baseline engine failed to flag missing kitchen activity: {base_res}")
 
-    # Step 7: Validate AWS CloudFormation / SAM IaC Template
+    # Step 7: Validate AWS CloudFormation / SAM Infrastructure Template
     check_step(7, "Validating CloudFormation / SAM Infrastructure Template")
     template_path = os.path.join(os.path.dirname(__file__), "iac", "aegiscare-iot-template.yaml")
     if os.path.exists(template_path) and os.path.getsize(template_path) > 1000:

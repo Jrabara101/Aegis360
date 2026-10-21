@@ -1,34 +1,46 @@
 {
-  "scenario_name": "Morning Inactivity Anomaly (No Kitchen Motion by 10 AM)",
+  "scenario_name": "Morning Inactivity Anomaly (ROUTINE_MISSED - No Kitchen Motion by 10 AM)",
   "description": "Senior rose briefly in bedroom at 07:30 AM, but no motion recorded in kitchen or living room by 10:15 AM.",
   "senior_id": "snr_8832_v",
   "device_id": "esp32_hub_01",
-  "expected_anomaly": "NO_KITCHEN_MOTION_BY_10AM",
+  "expected_anomaly": "ROUTINE_MISSED",
   "frames": [
     {
       "step": 1,
+      "room": "bedroom",
       "location": "bedroom",
-      "timestamp": "2026-10-17T07:30:00Z",
+      "timestamp": "2026-10-21T07:30:00Z",
       "pir_motion_detected": true,
       "description": "Wake-up motion in bedroom"
     },
     {
       "step": 2,
+      "room": "bedroom",
       "location": "bedroom",
-      "timestamp": "2026-10-17T07:32:00Z",
+      "timestamp": "2026-10-21T07:32:00Z",
       "pir_motion_detected": false,
       "description": "Motion ceases in bedroom"
     },
     {
       "step": 3,
+      "room": "kitchen",
       "location": "kitchen",
-      "timestamp": "2026-10-17T10:15:00Z",
+      "timestamp": "2026-10-21T10:15:00Z",
       "pir_motion_detected": false,
       "expected_active_by": "10:00:00",
       "current_time": "10:15:00",
-      "inactivity_minutes": 163,
+      "anomaly_type": "ROUTINE_MISSED",
+      "metrics": {
+        "no_motion_minutes": 163.0
+      },
+      "baseline": {
+        "expected_room": "kitchen",
+        "expected_by": "10:00",
+        "max_inactivity_window_minutes": 120.0
+      },
+      "inactivity_minutes": 163.0,
       "baseline_rule": "NO_KITCHEN_MOTION_BY_10AM",
-      "description": "Baseline threshold breached: Alert flagged"
+      "description": "Baseline threshold breached: Alert flagged for Alexa Voice Check-in"
     }
   ]
 }

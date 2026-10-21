@@ -7,30 +7,38 @@
   "frames": [
     {
       "step": 1,
+      "room": "bedroom",
       "location": "bedroom",
       "pir_motion_detected": true,
       "accelerometer": { "x_g": 0.05, "y_g": 0.08, "z_g": 1.01, "vector_magnitude_g": 1.01 },
+      "metrics": { "impact_g": 1.01 },
       "activity": "waking_up"
     },
     {
       "step": 2,
+      "room": "bathroom",
       "location": "bathroom",
       "pir_motion_detected": true,
       "accelerometer": { "x_g": -0.06, "y_g": 0.12, "z_g": 0.99, "vector_magnitude_g": 1.00 },
+      "metrics": { "impact_g": 1.00 },
       "activity": "morning_hygiene"
     },
     {
       "step": 3,
+      "room": "kitchen",
       "location": "kitchen",
       "pir_motion_detected": true,
       "accelerometer": { "x_g": 0.11, "y_g": -0.07, "z_g": 1.03, "vector_magnitude_g": 1.04 },
+      "metrics": { "impact_g": 1.04 },
       "activity": "preparing_breakfast"
     },
     {
       "step": 4,
+      "room": "living_room",
       "location": "living_room",
       "pir_motion_detected": true,
       "accelerometer": { "x_g": 0.02, "y_g": 0.01, "z_g": 0.99, "vector_magnitude_g": 0.99 },
+      "metrics": { "impact_g": 0.99 },
       "activity": "relaxing_reading"
     }
   ]

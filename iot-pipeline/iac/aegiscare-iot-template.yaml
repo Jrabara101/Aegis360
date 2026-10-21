@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   AegisCare 360 - Role 3: IoT Sensor & Real-Time Data Pipeline Infrastructure
-  Provisions DynamoDB Tables, KMS Keys, EventBridge Custom Bus,
+  Provisions the 6 Core DynamoDB Tables (infra/lib/data.ts), KMS Keys, EventBridge Custom Bus,
   DSP & Baseline Lambdas, and AWS IoT Topic Rules.
 
 Parameters:
@@ -45,12 +45,12 @@ Resources:
       Name: AegisCareBus
 
   # ============================================================================
-  # 3. Amazon DynamoDB Tables
+  # 3. Amazon DynamoDB 6 Core Tables (Matching infra/lib/data.ts)
   # ============================================================================
   SeniorsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: AegisCare_Seniors
+      TableName: Seniors
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: senior_id
@@ -58,6 +58,31 @@ Resources:
       KeySchema:
         - AttributeName: senior_id
           KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  CaregiversTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Caregivers
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: caregiver_id
+          AttributeType: S
+        - AttributeName: senior_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: caregiver_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by_senior
+          KeySchema:
+            - AttributeName: senior_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       SSESpecification:
         SSEEnabled: true
         SSEType: KMS
@@ -66,81 +91,112 @@ Resources:
   TrustedContactsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: AegisCare_TrustedContacts
+      TableName: TrustedContacts
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
+        - AttributeName: senior_id
+          AttributeType: S
         - AttributeName: contact_id
           AttributeType: S
-        - AttributeName: senior_id
+        - AttributeName: phone_hash
           AttributeType: S
       KeySchema:
+        - AttributeName: senior_id
+          KeyType: HASH
         - AttributeName: contact_id
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: SeniorIndex
-          KeySchema:
-            - AttributeName: senior_id
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-      SSESpecification:
-        SSEEnabled: true
-        SSEType: KMS
-        KMSMasterKeyId: !Ref AegisCareKMSKey
-
-  ScamLogsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: AegisCare_ScamLogs
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: log_id
-          AttributeType: S
-        - AttributeName: senior_id
-          AttributeType: S
-        - AttributeName: timestamp
-          AttributeType: S
-      KeySchema:
-        - AttributeName: log_id
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: SeniorDateIndex
-          KeySchema:
-            - AttributeName: senior_id
-              KeyType: HASH
-            - AttributeName: timestamp
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-      SSESpecification:
-        SSEEnabled: true
-        SSEType: KMS
-        KMSMasterKeyId: !Ref AegisCareKMSKey
-
-  ActivityEventsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: AegisCare_ActivityEvents
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: senior_id
-          AttributeType: S
-        - AttributeName: timestamp
-          AttributeType: S
-        - AttributeName: event_type
-          AttributeType: S
-      KeySchema:
-        - AttributeName: senior_id
-          KeyType: HASH
-        - AttributeName: timestamp
           KeyType: RANGE
       GlobalSecondaryIndexes:
-        - IndexName: EventTypeIndex
+        - IndexName: by_phone_hash
           KeySchema:
-            - AttributeName: event_type
+            - AttributeName: phone_hash
               KeyType: HASH
-            - AttributeName: timestamp
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  IncidentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Incidents
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: senior_id
+          AttributeType: S
+        - AttributeName: opened_at#incident_id
+          AttributeType: S
+        - AttributeName: incident_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: senior_id
+          KeyType: HASH
+        - AttributeName: opened_at#incident_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: by_incident
+          KeySchema:
+            - AttributeName: incident_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by_status
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: opened_at#incident_id
               KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Events
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: incident_id
+          AttributeType: S
+        - AttributeName: occurred_at#event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: incident_id
+          KeyType: HASH
+        - AttributeName: occurred_at#event_id
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  AlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Alerts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: alert_id
+          AttributeType: S
+        - AttributeName: incident_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: alert_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by_incident
+          KeySchema:
+            - AttributeName: incident_id
+              KeyType: HASH
           Projection:
             ProjectionType: ALL
       SSESpecification:
@@ -177,12 +233,17 @@ Resources:
                   - dynamodb:Scan
                 Resource:
                   - !GetAtt SeniorsTable.Arn
+                  - !GetAtt CaregiversTable.Arn
                   - !GetAtt TrustedContactsTable.Arn
-                  - !GetAtt ScamLogsTable.Arn
-                  - !GetAtt ActivityEventsTable.Arn
-                  - !Sub '${ActivityEventsTable.Arn}/*'
+                  - !GetAtt IncidentsTable.Arn
+                  - !GetAtt EventsTable.Arn
+                  - !GetAtt AlertsTable.Arn
+                  - !Sub '${SeniorsTable.Arn}/*'
+                  - !Sub '${CaregiversTable.Arn}/*'
                   - !Sub '${TrustedContactsTable.Arn}/*'
-                  - !Sub '${ScamLogsTable.Arn}/*'
+                  - !Sub '${IncidentsTable.Arn}/*'
+                  - !Sub '${EventsTable.Arn}/*'
+                  - !Sub '${AlertsTable.Arn}/*'
               - Effect: Allow
                 Action:
                   - events:PutEvents
@@ -211,7 +272,8 @@ Resources:
         Variables:
           EVENT_BUS_NAME: !Ref AegisCareEventBus
           SENIORS_TABLE: !Ref SeniorsTable
-          ACTIVITY_TABLE: !Ref ActivityEventsTable
+          INCIDENTS_TABLE: !Ref IncidentsTable
+          EVENTS_TABLE: !Ref EventsTable
 
   BaselineMonitorFunction:
     Type: AWS::Serverless::Function
@@ -227,7 +289,8 @@ Resources:
         Variables:
           EVENT_BUS_NAME: !Ref AegisCareEventBus
           SENIORS_TABLE: !Ref SeniorsTable
-          ACTIVITY_TABLE: !Ref ActivityEventsTable
+          INCIDENTS_TABLE: !Ref IncidentsTable
+          EVENTS_TABLE: !Ref EventsTable
 
   # ============================================================================
   # 6. AWS IoT Core Topic Rules & Permissions

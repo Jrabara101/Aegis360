@@ -4,6 +4,12 @@ AegisCare 360 - IoT Sensor Simulator (sensor_simulator.py)
 Streams mock ambient room motion, PIR inactivity events, and radar/accelerometer
 fall events directly to AWS IoT Core over MQTT, or locally in mock mode.
 
+Outputs events conforming to packages/core/src/events.ts:
+  - Event DetailType: Sensor.AnomalyDetected
+  - Anomaly Types: FALL_IMPACT, POST_IMPACT_IMMOBILITY, NO_MOTION_WINDOW, ROUTINE_MISSED
+  - Metric Names: impact_g, immobile_seconds, no_motion_minutes
+  - Key fields: room, baseline, demo=True
+
 Usage:
   python sensor_simulator.py --scenario fall --mock
   python sensor_simulator.py --scenario inactivity --mock
@@ -39,6 +45,7 @@ class Color:
     YELLOW = "\033[93m"
     BLUE = "\033[94m"
     CYAN = "\033[96m"
+    MAGENTA = "\033[95m"
 
 
 class SensorSimulator:
@@ -95,48 +102,104 @@ class SensorSimulator:
             self.mock_mode = True
             return True
 
+    def format_eventbridge_event(self, anomaly_type: str, room: str, metrics: Dict[str, float], baseline: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Formats the standardized EventBridge Sensor.AnomalyDetected event."""
+        now_ms = int(time.time() * 1000)
+        return {
+            "version": "0",
+            "detail-type": "Sensor.AnomalyDetected",
+            "source": "aegiscare.iot",
+            "detail": {
+                "schema_version": "1",
+                "event_id": f"evt_{now_ms}",
+                "senior_id": self.senior_id,
+                "incident_id": f"inc_{anomaly_type.lower()}_{self.senior_id}_{now_ms}",
+                "occurred_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "correlation_id": f"corr_{now_ms}",
+                "demo": True,
+                "device_id": self.device_id,
+                "room": room,
+                "anomaly_type": anomaly_type,
+                "metrics": metrics,
+                "baseline": baseline or {},
+            }
+        }
+
     def publish(self, payload: Dict[str, Any]) -> None:
         """Publishes a payload to AWS IoT Core or prints to console in mock mode."""
-        json_data = json.dumps(payload, indent=2)
+        room = payload.get("room") or payload.get("location", "unknown")
+        metrics = payload.get("metrics", {})
+        impact_g = metrics.get("impact_g") or payload.get("accelerometer", {}).get("vector_magnitude_g")
+        immobile_sec = metrics.get("immobile_seconds") or payload.get("immobility_duration_sec")
+        no_motion_min = metrics.get("no_motion_minutes") or payload.get("inactivity_minutes")
+        anomaly_type = payload.get("anomaly_type")
 
-        # Highlight critical fall impact or inactivity in console
-        vm = payload.get("accelerometer", {}).get("vector_magnitude_g")
-        immobility = payload.get("immobility_duration_sec")
-        baseline_rule = payload.get("baseline_rule")
+        # Fallback anomaly detection tags
+        if not anomaly_type:
+            if impact_g and impact_g >= 3.0:
+                anomaly_type = "FALL_IMPACT"
+            elif immobile_sec and immobile_sec >= 10:
+                anomaly_type = "POST_IMPACT_IMMOBILITY"
+            elif payload.get("baseline_rule") == "NO_KITCHEN_MOTION_BY_10AM":
+                anomaly_type = "ROUTINE_MISSED"
 
         status_tag = f"{Color.GREEN}[NORMAL TELEMETRY]{Color.RESET}"
-        if vm and vm > 3.0:
-            status_tag = f"{Color.RED}{Color.BOLD}>>> [CRITICAL FALL IMPACT DETECTED: {vm}g] <<<{Color.RESET}"
-        elif immobility and immobility > 0:
-            status_tag = f"{Color.YELLOW}{Color.BOLD}[POST-IMPACT IMMOBILITY: {immobility}s]{Color.RESET}"
-        elif baseline_rule:
-            status_tag = f"{Color.YELLOW}{Color.BOLD}[INACTIVITY ANOMALY: {baseline_rule}]{Color.RESET}"
+        eb_event = None
 
-        print(f"{status_tag} | Room: {payload.get('location')} | Time: {payload.get('timestamp')}")
+        if anomaly_type == "FALL_IMPACT":
+            status_tag = f"{Color.RED}{Color.BOLD}>>> [CRITICAL ANOMALY: FALL_IMPACT (impact_g: {impact_g})] <<<{Color.RESET}"
+            eb_event = self.format_eventbridge_event(
+                anomaly_type="FALL_IMPACT",
+                room=room,
+                metrics={"impact_g": float(impact_g)},
+                baseline={"impact_threshold_g": 3.0},
+            )
+        elif anomaly_type == "POST_IMPACT_IMMOBILITY":
+            status_tag = f"{Color.YELLOW}{Color.BOLD}[IMMOBILITY ANOMALY: POST_IMPACT_IMMOBILITY (immobile_seconds: {immobile_sec})] {Color.RESET}"
+            eb_event = self.format_eventbridge_event(
+                anomaly_type="POST_IMPACT_IMMOBILITY",
+                room=room,
+                metrics={"immobile_seconds": float(immobile_sec), "impact_g": float(impact_g or 1.0)},
+                baseline={"immobility_threshold_seconds": 10.0},
+            )
+        elif anomaly_type in ("ROUTINE_MISSED", "NO_MOTION_WINDOW"):
+            status_tag = f"{Color.YELLOW}{Color.BOLD}[SCHEDULE ANOMALY: {anomaly_type} (no_motion_minutes: {no_motion_min})] {Color.RESET}"
+            eb_event = self.format_eventbridge_event(
+                anomaly_type=anomaly_type,
+                room=room,
+                metrics={"no_motion_minutes": float(no_motion_min or 163.0)},
+                baseline={"expected_room": "kitchen", "expected_by": "10:00"},
+            )
+
+        print(f"{status_tag} | Room: {room} | Time: {payload.get('timestamp')}")
 
         if not self.mock_mode and self.mqtt_client:
             self.mqtt_client.publish(self.topic, json.dumps(payload), 1)
         else:
-            # Print payload summary
-            print(f"{Color.CYAN}Payload published to '{self.topic}':{Color.RESET}")
+            print(f"{Color.CYAN}MQTT Telemetry Payload ('{self.topic}'):{Color.RESET}")
             print(json.dumps(payload, indent=2))
-            print("-" * 60)
+
+        if eb_event:
+            print(f"\n{Color.MAGENTA}{Color.BOLD}⚡ EventBridge 'AegisCareBus' Event Dispatched (For Safety Agent):{Color.RESET}")
+            print(f"{Color.MAGENTA}{json.dumps(eb_event, indent=2)}{Color.RESET}")
+
+        print("-" * 65)
 
     def run_fall_scenario(self, interval: float = 1.0) -> None:
         """Executes full fall sequence (Normal -> Freefall -> Violent Impact -> Immobility)."""
         print(f"{Color.BOLD}=== Scenario: Fall Incident Simulation (Living Room) ==={Color.RESET}\n")
         frames = self.generator.generate_fall_sequence(room="living_room")
-        for i, frame in enumerate(frames, 1):
+        for frame in frames:
             self.publish(frame)
             time.sleep(interval)
         print(f"\n{Color.GREEN}[SIMULATOR] Fall incident scenario completed.{Color.RESET}")
 
     def run_inactivity_scenario(self) -> None:
         """Executes morning inactivity baseline breach scenario."""
-        print(f"{Color.BOLD}=== Scenario: Morning Inactivity Anomaly ==={Color.RESET}\n")
+        print(f"{Color.BOLD}=== Scenario: Morning Routine Missed Anomaly (ROUTINE_MISSED) ==={Color.RESET}\n")
         frame = self.generator.generate_morning_inactivity_event()
         self.publish(frame)
-        print(f"\n{Color.GREEN}[SIMULATOR] Morning inactivity scenario completed.{Color.RESET}")
+        print(f"\n{Color.GREEN}[SIMULATOR] Morning routine scenario completed.{Color.RESET}")
 
     def run_normal_routine(self, steps: int = 4, interval: float = 1.0) -> None:
         """Executes normal room transitions."""

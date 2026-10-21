@@ -1,8 +1,8 @@
 """
 AegisCare 360 - DSP Fall Detection Lambda Handler
 Triggered by AWS IoT Core SQL Rules on topic 'aegiscare/seniors/+/telemetry'.
-Executes real-time DSP signal filtering to detect raw impact vectors (e.g. >3.5g)
-and publishes structured anomaly events to EventBridge 'AegisCareBus'.
+Executes real-time DSP signal filtering to detect raw impact vectors (e.g. >=3.0g)
+and publishes structured 'Sensor.AnomalyDetected' events to EventBridge 'AegisCareBus'.
 """
 
 import os
@@ -16,7 +16,6 @@ try:
 except ImportError:
     from .dsp_math import DSPProcessor
 
-
 try:
     import boto3
     HAVE_BOTO3 = True
@@ -24,8 +23,9 @@ except ImportError:
     HAVE_BOTO3 = False
 
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "AegisCareBus")
-SENIORS_TABLE = os.environ.get("SENIORS_TABLE", "AegisCare_Seniors")
-ACTIVITY_TABLE = os.environ.get("ACTIVITY_TABLE", "AegisCare_ActivityEvents")
+SENIORS_TABLE = os.environ.get("SENIORS_TABLE", "Seniors")
+INCIDENTS_TABLE = os.environ.get("INCIDENTS_TABLE", "Incidents")
+EVENTS_TABLE = os.environ.get("EVENTS_TABLE", "Events")
 
 dsp_processor = DSPProcessor(fall_impact_threshold_g=3.0)
 
@@ -41,6 +41,15 @@ def get_aws_clients():
         return None, None
 
 
+def ensure_id_prefix(val: str, prefix: str) -> str:
+    """Ensures ID matches regex requirement ^prefix_[0-9A-Za-z_]+$."""
+    if not val:
+        return f"{prefix}_{int(time.time() * 1000)}"
+    if val.startswith(f"{prefix}_"):
+        return val
+    return f"{prefix}_{val}"
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     AWS Lambda entrypoint.
@@ -50,40 +59,48 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     # 1. Evaluate DSP signal
     dsp_result = dsp_processor.evaluate_telemetry_frame(event)
-    senior_id = dsp_result["senior_id"]
+    senior_id = ensure_id_prefix(dsp_result.get("senior_id", "snr_8832_v"), "snr")
+    room = dsp_result["room"]
     timestamp = dsp_result.get("timestamp") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    is_anomaly = dsp_result["is_fall_impact"] or (dsp_result["is_immobile"] and dsp_result.get("immobility_duration_sec", 0) >= 10)
 
+    is_anomaly = bool(dsp_result["anomaly_type"])
     eventbridge_client, dynamodb_resource = get_aws_clients()
 
-    # 2. If fall or severe immobility detected, construct structured EventBridge payload
+    eventbridge_payload = None
+
+    # 2. If fall or severe immobility detected, construct structured Sensor.AnomalyDetected payload
     if is_anomaly:
-        anomaly_type = "IMPACT_VECTOR_DETECTED" if dsp_result["is_fall_impact"] else "POST_IMPACT_IMMOBILITY_DETECTED"
+        now_ms = int(time.time() * 1000)
+        event_id = ensure_id_prefix(f"evt_{now_ms}", "evt")
+        incident_id = ensure_id_prefix(f"inc_fall_{senior_id}_{now_ms}", "inc")
+
+        anomaly_detail = {
+            "schema_version": "1",
+            "event_id": event_id,
+            "senior_id": senior_id,
+            "incident_id": incident_id,
+            "occurred_at": timestamp,
+            "correlation_id": f"corr_{now_ms}",
+            "demo": True,
+            "device_id": event.get("device_id", "esp32_hub_01"),
+            "room": room,
+            "anomaly_type": dsp_result["anomaly_type"],  # "FALL_IMPACT" or "POST_IMPACT_IMMOBILITY"
+            "metrics": dsp_result["metrics"],            # {"impact_g": 4.23}
+            "baseline": dsp_result["baseline"],
+        }
+
         eventbridge_payload = {
             "version": "0",
             "id": str(uuid.uuid4()),
-            "detail-type": "AegisCare.PhysicalAnomalyDetected",
-            "source": "aegiscare.iot.dsp",
+            "detail-type": "Sensor.AnomalyDetected",
+            "source": "aegiscare.iot",
             "time": timestamp,
             "region": os.environ.get("AWS_REGION", "us-east-1"),
             "resources": [f"arn:aws:iot:sensor:{senior_id}"],
-            "detail": {
-                "senior_id": senior_id,
-                "device_id": event.get("device_id", "esp32_hub_01"),
-                "anomaly_type": anomaly_type,
-                "g_force": dsp_result["vector_magnitude_g"],
-                "post_impact_immobility": dsp_result["is_immobile"],
-                "immobility_duration_sec": dsp_result["immobility_duration_sec"],
-                "location": dsp_result["location"],
-                "threat_severity": "CRITICAL" if dsp_result["is_fall_impact"] else "HIGH",
-                "raw_telemetry_snippet": {
-                    "accelerometer": event.get("accelerometer"),
-                    "radar_presence": event.get("radar_presence"),
-                }
-            }
+            "detail": anomaly_detail,
         }
 
-        print(f"[DSP Lambda] >>> THRESHOLD BREACH DETECTED: {anomaly_type} (VM: {dsp_result['vector_magnitude_g']}g) <<<")
+        print(f"[DSP Lambda] >>> THRESHOLD BREACH DETECTED: {dsp_result['anomaly_type']} (impact_g: {dsp_result['impact_g']}) in room: {room} <<<")
 
         # 3. Publish to EventBridge AegisCareBus
         if eventbridge_client:
@@ -91,52 +108,72 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 response = eventbridge_client.put_events(
                     Entries=[
                         {
-                            "Source": "aegiscare.iot.dsp",
-                            "DetailType": "AegisCare.PhysicalAnomalyDetected",
-                            "Detail": json.dumps(eventbridge_payload["detail"]),
+                            "Source": "aegiscare.iot",
+                            "DetailType": "Sensor.AnomalyDetected",
+                            "Detail": json.dumps(anomaly_detail),
                             "EventBusName": EVENT_BUS_NAME,
                         }
                     ]
                 )
-                print(f"[EventBridge] Published anomaly event to {EVENT_BUS_NAME}: {response}")
+                print(f"[EventBridge] Published Sensor.AnomalyDetected event to {EVENT_BUS_NAME}: {response}")
             except Exception as e:
                 print(f"[EventBridge Error] Failed to publish event: {e}")
 
-        # 4. Update DynamoDB senior emergency status
+        # 4. Record new Incident in DynamoDB Incidents table
         if dynamodb_resource:
+            try:
+                incidents_tbl = dynamodb_resource.Table(INCIDENTS_TABLE)
+                incidents_tbl.put_item(
+                    Item={
+                        "senior_id": senior_id,
+                        "opened_at#incident_id": f"{timestamp}#{incident_id}",
+                        "incident_id": incident_id,
+                        "kind": "FALL",
+                        "status": "OPEN",
+                        "severity": "CRITICAL",
+                        "title": f"Fall impact ({dsp_result['impact_g']}g) in {room}",
+                        "opened_at": timestamp,
+                    }
+                )
+                print(f"[DynamoDB] Created Incident '{incident_id}' for senior '{senior_id}'")
+            except Exception as e:
+                print(f"[DynamoDB Error] Failed to record incident: {e}")
+
+            # 5. Update Seniors table emergency status
             try:
                 seniors_tbl = dynamodb_resource.Table(SENIORS_TABLE)
                 seniors_tbl.update_item(
                     Key={"senior_id": senior_id},
-                    UpdateExpression="SET emergency_status = :status, last_fall_alert = :alert, updated_at = :now",
+                    UpdateExpression="SET #st = :status, last_activity_at = :now",
+                    ExpressionAttributeNames={"#st": "status"},
                     ExpressionAttributeValues={
-                        ":status": "CRITICAL_FALL_UNACKNOWLEDGED",
-                        ":alert": anomaly_type,
+                        ":status": "ALERT",
                         ":now": timestamp,
                     }
                 )
-                print(f"[DynamoDB] Updated senior '{senior_id}' status to CRITICAL_FALL_UNACKNOWLEDGED")
             except Exception as e:
                 print(f"[DynamoDB Error] Failed to update senior state: {e}")
 
-    # 5. Always record event into ActivityEvents log
+    # 6. Always record event into Events table
     if dynamodb_resource:
         try:
-            activity_tbl = dynamodb_resource.Table(ACTIVITY_TABLE)
-            activity_tbl.put_item(
+            events_tbl = dynamodb_resource.Table(EVENTS_TABLE)
+            incident_ref = eventbridge_payload["detail"]["incident_id"] if eventbridge_payload else f"inc_stream_{senior_id}"
+            now_ms = int(time.time() * 1000)
+            events_tbl.put_item(
                 Item={
+                    "incident_id": incident_ref,
+                    "occurred_at#event_id": f"{timestamp}#evt_{now_ms}",
                     "senior_id": senior_id,
-                    "timestamp": timestamp,
-                    "event_id": f"evt_{int(time.time()*1000)}",
-                    "event_type": "FALL_IMPACT" if dsp_result["is_fall_impact"] else ("IMMOBILITY" if dsp_result["is_immobile"] else "NORMAL_MOTION"),
-                    "location": dsp_result["location"],
-                    "g_force": str(dsp_result["vector_magnitude_g"]),
-                    "immobility_detected": dsp_result["is_immobile"],
-                    "dsp_evaluated": True,
+                    "event_type": "Sensor.AnomalyDetected" if is_anomaly else "Sensor.TelemetryStream",
+                    "anomaly_type": dsp_result["anomaly_type"] if is_anomaly else "NORMAL",
+                    "room": room,
+                    "metrics": {k: str(v) for k, v in dsp_result["metrics"].items()},
+                    "ttl": int(time.time()) + 30 * 24 * 3600,
                 }
             )
         except Exception as e:
-            print(f"[DynamoDB Error] Failed to write activity log: {e}")
+            print(f"[DynamoDB Error] Failed to write event log: {e}")
 
     return {
         "statusCode": 200,
@@ -144,5 +181,6 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             "status": "PROCESSED",
             "dsp_result": dsp_result,
             "anomaly_flagged": is_anomaly,
+            "event_detail": eventbridge_payload["detail"] if eventbridge_payload else None,
         })
     }

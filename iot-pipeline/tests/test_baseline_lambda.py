@@ -1,5 +1,9 @@
 """
 Unit tests for Baseline Rule Engine and baseline_monitor Lambda
+Conforms to packages/core/src/events.ts:
+  - Anomaly Types: ROUTINE_MISSED, NO_MOTION_WINDOW
+  - Metric Names: no_motion_minutes
+  - Key fields: room, baseline
 """
 
 import sys
@@ -10,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import importlib
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 baseline_rules_mod = importlib.import_module("lambda.baseline_monitor.baseline_rules")
 BaselineRuleEngine = baseline_rules_mod.BaselineRuleEngine
 baseline_handler = importlib.import_module("lambda.baseline_monitor.index")
@@ -19,29 +23,33 @@ baseline_handler = importlib.import_module("lambda.baseline_monitor.index")
 def test_baseline_evaluation_kitchen_activity_present():
     engine = BaselineRuleEngine()
     events = [
-        {"location": "bedroom", "timestamp": "2026-10-17T07:30:00Z", "pir_motion_detected": True},
-        {"location": "kitchen", "timestamp": "2026-10-17T08:45:00Z", "pir_motion_detected": True},
+        {"room": "bedroom", "location": "bedroom", "timestamp": "2026-10-21T07:30:00Z", "pir_motion_detected": True},
+        {"room": "kitchen", "location": "kitchen", "timestamp": "2026-10-21T08:45:00Z", "pir_motion_detected": True},
     ]
     # Check at 10:30 AM
-    check_time = datetime(2026, 10, 17, 10, 30, 0, tzinfo=timezone.utc)
+    check_time = datetime(2026, 10, 21, 10, 30, 0, tzinfo=timezone.utc)
     res = engine.evaluate_inactivity("snr_8832_v", events, check_time=check_time)
 
     assert res["is_breached"] is False
-    assert res["kitchen_motion_detected"] is True
+    assert res["kitchen_motion_logged"] is True
+    assert res["anomaly_type"] is None
 
 
 def test_baseline_evaluation_kitchen_activity_missing():
     engine = BaselineRuleEngine()
     events = [
-        {"location": "bedroom", "timestamp": "2026-10-17T07:30:00Z", "pir_motion_detected": True},
-        {"location": "bedroom", "timestamp": "2026-10-17T07:32:00Z", "pir_motion_detected": False},
+        {"room": "bedroom", "location": "bedroom", "timestamp": "2026-10-21T07:30:00Z", "pir_motion_detected": True},
+        {"room": "bedroom", "location": "bedroom", "timestamp": "2026-10-21T07:32:00Z", "pir_motion_detected": False},
     ]
     # Check at 10:15 AM (past 10:00 AM cutoff)
-    check_time = datetime(2026, 10, 17, 10, 15, 0, tzinfo=timezone.utc)
+    check_time = datetime(2026, 10, 21, 10, 15, 0, tzinfo=timezone.utc)
     res = engine.evaluate_inactivity("snr_8832_v", events, check_time=check_time)
 
     assert res["is_breached"] is True
-    assert res["kitchen_motion_detected"] is False
+    assert res["kitchen_motion_logged"] is False
+    assert res["anomaly_type"] == "ROUTINE_MISSED"
+    assert res["room"] == "kitchen"
+    assert "no_motion_minutes" in res["metrics"]
     assert res["recommended_action"] == "INITIATE_ALEXA_VOICE_CHECKIN"
 
 
@@ -50,12 +58,15 @@ def test_baseline_lambda_handler_execution():
         "senior_id": "snr_8832_v",
         "current_time": "10:15:00",
         "inactivity_minutes": 163,
-        "baseline_rule": "NO_KITCHEN_MOTION_BY_10AM",
+        "room": "kitchen",
         "frames": [
-            {"location": "bedroom", "timestamp": "2026-10-17T07:30:00Z", "pir_motion_detected": True},
+            {"room": "bedroom", "timestamp": "2026-10-21T07:30:00Z", "pir_motion_detected": True},
         ]
     }
     response = baseline_handler.lambda_handler(event, None)
     assert response["statusCode"] == 200
     body = json.loads(response["body"])
     assert body["is_breached"] is True
+    assert body["event_detail"]["anomaly_type"] == "ROUTINE_MISSED"
+    assert body["event_detail"]["room"] == "kitchen"
+    assert "no_motion_minutes" in body["event_detail"]["metrics"]
