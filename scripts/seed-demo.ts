@@ -71,9 +71,10 @@ await doc.send(
   }),
 );
 
+// The web app finds a caregiver by the lowercase email Cognito gives it (the by_email index).
 const contacts: Record<string, { email?: string; phone?: string }> = {
-  cg_demo_ana: { email: args["ana-email"], phone: args["ana-phone"] },
-  cg_demo_luis: { email: args["luis-email"] },
+  cg_demo_ana: { email: args["ana-email"]?.toLowerCase(), phone: args["ana-phone"] },
+  cg_demo_luis: { email: args["luis-email"]?.toLowerCase() },
 };
 for (const caregiver of DEMO.caregivers) {
   await doc.send(

@@ -21,7 +21,7 @@ Try it locally, no AWS needed:
 npm install
 npm run demo            # senior gets the safe word wrong → both caregivers get a P1 alert
 npm run demo -- --pass  # senior knows it → no alert
-npm test                # 58 tests
+npm test                # 86 tests
 npm run web             # launches family defense network frontend on http://localhost:3000
 ```
 
@@ -90,7 +90,8 @@ npm run deploy -- -c foundationModel=<model or inference profile ID> -c notifyFr
 - Without `-c foundationModel`, there are no Bedrock agents and scoring is rules-only.
 - **Alerts:** `-c notifyFromEmail` needs a verified SES identity. While SES is in its sandbox, each recipient address must be verified too. `-c smsOrigination=<phone number or pool ID>` turns on SMS once you have an AWS End User Messaging number. Registering one can take days, so start early. With neither set, alerts are only logged (the `NotifyChannels` output says which are on).
 - **Caregiver contact details:** notify reads `phone` (E.164, e.g. `+15555550123`) and `email` from the Caregivers table, in plain text. The table itself is encrypted at rest.
-- **Web app:** the `WebUrl` output. Invite a caregiver, then link them to a senior by putting the same email on their Caregivers row (lowercase):
+- **Demo data:** the tables start empty. `npm run seed -- --ana-email <verified SES address>` loads Rosa (`snr_demo_rosa`), her caregivers Ana and Luis, and the safe word "blue pelican", hashed with the stack's pepper. Add `--ana-phone +1555…` for SMS. Run it again any time; it overwrites.
+- **Web app:** the `WebUrl` output. Invite a caregiver, then link them to a senior by putting the same email on their Caregivers row (lowercase; the seed script does this for Ana):
   ```bash
   aws cognito-idp admin-create-user --user-pool-id <UserPoolId> --username ana@example.com --user-attributes Name=email,Value=ana@example.com Name=email_verified,Value=true --message-action SUPPRESS
   aws cognito-idp admin-set-user-password --user-pool-id <UserPoolId> --username ana@example.com --password '<10+ chars>' --permanent
