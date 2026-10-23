@@ -1,0 +1,19 @@
+{
+  "name": "@aegiscare/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Caregiver web app API: read status, incidents and alerts; acknowledge alerts",
+  "exports": {
+    ".": "./src/app.ts"
+  },
+  "dependencies": {
+    "@aegiscare/aws": "0.1.0",
+    "@aegiscare/core": "0.1.0",
+    "@aws-sdk/client-dynamodb": "^3.1152.0",
+    "@aws-sdk/lib-dynamodb": "^3.1152.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.150"
+  }
+}

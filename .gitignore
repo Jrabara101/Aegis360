@@ -5,3 +5,7 @@ coverage/
 .env
 .env.*
 *.log
+# Device keys and certificate ARN from scripts/iot-device-setup.ps1
+iot-pipeline/simulator/certs/
+# Local copy of the deploy outputs for live mode in `npm run web`
+services/web/public/config.json

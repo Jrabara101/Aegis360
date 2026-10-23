@@ -6,6 +6,8 @@ export * from "./severity";
 export * from "./templates";
 export * from "./ports";
 export * from "./safeWord";
+export * from "./agentCall";
+export * from "./safety/assess";
 export * from "./threat/keywordScorer";
 export * from "./threat/agentOutput";
 export * from "./threat/assess";

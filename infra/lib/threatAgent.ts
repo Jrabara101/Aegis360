@@ -53,18 +53,20 @@ export class AegisGuardrail extends Construct {
   }
 }
 
-export interface ThreatAgentProps {
+export interface InstructedAgentProps {
+  agentName: string;
+  description: string;
   foundationModel: string;
   instructionsPath: string;
   guardrail: AegisGuardrail;
 }
 
-/** Inbound Threat Agent: instructions + guardrail, no action groups yet (the invoker passes the context it needs). */
-export class ThreatAgent extends Construct {
+/** A Bedrock agent with instructions + guardrail and no action groups (the invoker passes the context it needs). */
+export class InstructedAgent extends Construct {
   readonly agent: CfnAgent;
   readonly alias: CfnAgentAlias;
 
-  constructor(scope: Construct, id: string, props: ThreatAgentProps) {
+  constructor(scope: Construct, id: string, props: InstructedAgentProps) {
     super(scope, id);
     const stack = Stack.of(this);
 
@@ -88,8 +90,8 @@ export class ThreatAgent extends Construct {
     role.addToPolicy(new PolicyStatement({ actions: ["bedrock:ApplyGuardrail"], resources: [props.guardrail.guardrail.attrGuardrailArn] }));
 
     this.agent = new CfnAgent(this, "Agent", {
-      agentName: "AegisCareThreatAgent",
-      description: "Scores live call transcripts for scam risk. Returns JSON only.",
+      agentName: props.agentName,
+      description: props.description,
       foundationModel: props.foundationModel,
       instruction: readFileSync(props.instructionsPath, "utf8"),
       agentResourceRoleArn: role.roleArn,

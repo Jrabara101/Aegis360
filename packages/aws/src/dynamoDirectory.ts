@@ -56,6 +56,8 @@ export class DynamoDirectory implements SeniorDirectory {
         ExpressionAttributeNames: { "#st": "status" },
         ExpressionAttributeValues: { ":s": seniorId, ":resolved": "RESOLVED", ":closed": "CLOSED" },
         ScanIndexForward: false,
+        // The state writer reads this right after its own update.
+        ConsistentRead: true,
       }),
     );
     return (out.Items ?? []).map((i) => ({
