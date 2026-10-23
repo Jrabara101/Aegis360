@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Sensitive IoT Certificates & AWS credentials
+simulator/certs/*.pem
+simulator/certs/*.crt
+simulator/certs/*.key
+*.pem
+*.key
+*.crt
+config.json
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
