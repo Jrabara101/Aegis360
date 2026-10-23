@@ -22,7 +22,8 @@
     "deploy": "npm run web:build && npm run deploy -w infra --",
     "web": "npm run dev -w @aegiscare/web",
     "web:build": "npm run build -w @aegiscare/web",
-    "web:preview": "npm run preview -w @aegiscare/web"
+    "web:preview": "npm run preview -w @aegiscare/web",
+    "seed": "tsx scripts/seed-demo.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
