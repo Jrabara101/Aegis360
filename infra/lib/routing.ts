@@ -4,7 +4,7 @@ import type { EventPattern } from "aws-cdk-lib/aws-events";
 // EventBridge ORs values inside a field and ANDs fields, so an "A or B" with different
 // fields is two rules with the same target.
 
-export type Target = "threatAgent" | "caregiverAgent" | "safeWordPrompt" | "notify" | "stateWriter";
+export type Target = "threatAgent" | "safetyAgent" | "caregiverAgent" | "safeWordPrompt" | "notify" | "stateWriter";
 
 export interface RouteDef {
   id: string;
@@ -16,6 +16,7 @@ const all = { source: [{ prefix: "aegiscare." }] } as unknown as EventPattern;
 
 export const ROUTES: RouteDef[] = [
   { id: "to-threat-agent", target: "threatAgent", pattern: { detailType: ["Call.TranscriptChunk"] } },
+  { id: "to-safety-agent", target: "safetyAgent", pattern: { detailType: ["Sensor.AnomalyDetected"] } },
 
   // Asked once per call: only when the severity first reaches HIGH or CRITICAL.
   {
@@ -23,6 +24,8 @@ export const ROUTES: RouteDef[] = [
     target: "safeWordPrompt",
     pattern: { detailType: ["Threat.Assessed"], detail: { action: ["VERIFY_SAFE_WORD"], severity_increased: [true] } },
   },
+  // The same prompt handler asks "are you okay?" after a possible fall.
+  { id: "to-check-in", target: "safeWordPrompt", pattern: { detailType: ["Safety.Assessed"], detail: { action: ["CHECK_IN"] } } },
 
   { id: "to-caregiver-threat-critical", target: "caregiverAgent", pattern: { detailType: ["Threat.Assessed"], detail: { severity: ["CRITICAL"], severity_increased: [true] } } },
   { id: "to-caregiver-threat-report", target: "caregiverAgent", pattern: { detailType: ["Threat.Assessed"], detail: { action: ["ALERT_CAREGIVER"] } } },

@@ -1,0 +1,346 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AegisCare 360 - Role 3: IoT Sensor & Real-Time Data Pipeline Infrastructure
+  Provisions the 6 Core DynamoDB Tables (infra/lib/data.ts), KMS Keys, EventBridge Custom Bus,
+  DSP & Baseline Lambdas, and AWS IoT Topic Rules.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+Resources:
+  # ============================================================================
+  # 1. AWS KMS Encryption Key & Alias
+  # ============================================================================
+  AegisCareKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Master Key for AegisCare 360 PII (Passphrases & Phone Numbers)
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable Root Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  AegisCareKMSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/aegiscare-encryption-key
+      TargetKeyId: !Ref AegisCareKMSKey
+
+  # ============================================================================
+  # 2. AWS EventBridge Custom Event Bus
+  # ============================================================================
+  AegisCareEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: AegisCareBus
+
+  # ============================================================================
+  # 3. Amazon DynamoDB 6 Core Tables (Matching infra/lib/data.ts)
+  # ============================================================================
+  SeniorsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Seniors
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: senior_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: senior_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  CaregiversTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Caregivers
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: caregiver_id
+          AttributeType: S
+        - AttributeName: senior_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: caregiver_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by_senior
+          KeySchema:
+            - AttributeName: senior_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  TrustedContactsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: TrustedContacts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: senior_id
+          AttributeType: S
+        - AttributeName: contact_id
+          AttributeType: S
+        - AttributeName: phone_hash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: senior_id
+          KeyType: HASH
+        - AttributeName: contact_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: by_phone_hash
+          KeySchema:
+            - AttributeName: phone_hash
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  IncidentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Incidents
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: senior_id
+          AttributeType: S
+        - AttributeName: opened_at#incident_id
+          AttributeType: S
+        - AttributeName: incident_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: senior_id
+          KeyType: HASH
+        - AttributeName: opened_at#incident_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: by_incident
+          KeySchema:
+            - AttributeName: incident_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by_status
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: opened_at#incident_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Events
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: incident_id
+          AttributeType: S
+        - AttributeName: occurred_at#event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: incident_id
+          KeyType: HASH
+        - AttributeName: occurred_at#event_id
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  AlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Alerts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: alert_id
+          AttributeType: S
+        - AttributeName: incident_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: alert_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by_incident
+          KeySchema:
+            - AttributeName: incident_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref AegisCareKMSKey
+
+  # ============================================================================
+  # 4. IAM Execution Roles for Serverless Functions
+  # ============================================================================
+  AegisCareLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AegisCareLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt SeniorsTable.Arn
+                  - !GetAtt CaregiversTable.Arn
+                  - !GetAtt TrustedContactsTable.Arn
+                  - !GetAtt IncidentsTable.Arn
+                  - !GetAtt EventsTable.Arn
+                  - !GetAtt AlertsTable.Arn
+                  - !Sub '${SeniorsTable.Arn}/*'
+                  - !Sub '${CaregiversTable.Arn}/*'
+                  - !Sub '${TrustedContactsTable.Arn}/*'
+                  - !Sub '${IncidentsTable.Arn}/*'
+                  - !Sub '${EventsTable.Arn}/*'
+                  - !Sub '${AlertsTable.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt AegisCareEventBus.Arn
+              - Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !GetAtt AegisCareKMSKey.Arn
+
+  # ============================================================================
+  # 5. AWS Lambda Functions
+  # ============================================================================
+  DSPFallProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AegisCare_DSPProcessor
+      CodeUri: ../lambda/dsp_processor/
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 15
+      Role: !GetAtt AegisCareLambdaRole.Arn
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: !Ref AegisCareEventBus
+          SENIORS_TABLE: !Ref SeniorsTable
+          INCIDENTS_TABLE: !Ref IncidentsTable
+          EVENTS_TABLE: !Ref EventsTable
+
+  BaselineMonitorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AegisCare_BaselineMonitor
+      CodeUri: ../lambda/baseline_monitor/
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      MemorySize: 256
+      Timeout: 15
+      Role: !GetAtt AegisCareLambdaRole.Arn
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: !Ref AegisCareEventBus
+          SENIORS_TABLE: !Ref SeniorsTable
+          INCIDENTS_TABLE: !Ref IncidentsTable
+          EVENTS_TABLE: !Ref EventsTable
+
+  # ============================================================================
+  # 6. AWS IoT Core Topic Rules & Permissions
+  # ============================================================================
+  IoTDSPPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt DSPFallProcessorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: iot.amazonaws.com
+
+  IoTBaselinePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt BaselineMonitorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: iot.amazonaws.com
+
+  IoTDSPTopicRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: AegisCare_SpatialTelemetryRule
+      TopicRulePayload:
+        RuleDisabled: false
+        Sql: "SELECT *, topic(3) AS senior_id_from_topic FROM 'aegiscare/seniors/+/telemetry' WHERE sensor_type = 'spatial_telemetry'"
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt DSPFallProcessorFunction.Arn
+
+  IoTBaselineTopicRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: AegisCare_RoutineBaselineRule
+      TopicRulePayload:
+        RuleDisabled: false
+        Sql: "SELECT *, topic(3) AS senior_id_from_topic FROM 'aegiscare/seniors/+/telemetry' WHERE sensor_type = 'routine_baseline_telemetry'"
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt BaselineMonitorFunction.Arn
+
+Outputs:
+  EventBusArn:
+    Description: ARN of the central AegisCare EventBus
+    Value: !GetAtt AegisCareEventBus.Arn
+  KMSKeyArn:
+    Description: ARN of the KMS Encryption Key
+    Value: !GetAtt AegisCareKMSKey.Arn
+  DSPFunctionArn:
+    Description: ARN of the DSP Fall Detection Lambda
+    Value: !GetAtt DSPFallProcessorFunction.Arn
+  BaselineFunctionArn:
+    Description: ARN of the Daily Baseline Monitor Lambda
+    Value: !GetAtt BaselineMonitorFunction.Arn

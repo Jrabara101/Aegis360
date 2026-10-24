@@ -1,0 +1,15 @@
+{
+  "aws_region": "us-east-1",
+  "iot_endpoint": "your-prefix-ats.iot.us-east-1.amazonaws.com",
+  "root_ca_path": "certs/AmazonRootCA1.pem",
+  "cert_path": "certs/device.pem.crt",
+  "key_path": "certs/device.private.key",
+  "event_bus_name": "AegisCareBus",
+  "kms_key_id": "alias/aegiscare-encryption-key",
+  "tables": {
+    "seniors": "AegisCare_Seniors",
+    "trusted_contacts": "AegisCare_TrustedContacts",
+    "scam_logs": "AegisCare_ScamLogs",
+    "activity_events": "AegisCare_ActivityEvents"
+  }
+}

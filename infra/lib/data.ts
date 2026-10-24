@@ -2,8 +2,10 @@ import { RemovalPolicy } from "aws-cdk-lib";
 import { AttributeType, BillingMode, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 
-// Contracts doc, section 7. Teammate 3 owns these tables; they're defined here so the MCP
-// server and agents can deploy before the IoT/data stack exists. Keep keys in sync with the doc.
+// Contracts doc, section 7. This stack is the single owner of these tables: the IoT pipeline's
+// Lambdas get the names through environment variables (infra/lib/iot.ts), so don't deploy
+// iot-pipeline/iac/aegiscare-iot-template.yaml beside it. Keep keys in sync with the doc.
+// Encryption is AWS-managed; the IoT pipeline's customer-managed KMS key isn't used.
 
 export class DataTables extends Construct {
   readonly seniors: Table;
@@ -27,6 +29,8 @@ export class DataTables extends Construct {
 
     this.caregivers = new Table(this, "Caregivers", { ...common, partitionKey: s("caregiver_id") });
     this.caregivers.addGlobalSecondaryIndex({ indexName: "by_senior", partitionKey: s("senior_id") });
+    // The caregiver web app signs in with email and finds its seniors here.
+    this.caregivers.addGlobalSecondaryIndex({ indexName: "by_email", partitionKey: s("email") });
 
     this.trustedContacts = new Table(this, "TrustedContacts", { ...common, partitionKey: s("senior_id"), sortKey: s("contact_id") });
     this.trustedContacts.addGlobalSecondaryIndex({ indexName: "by_phone_hash", partitionKey: s("phone_hash") });
@@ -44,5 +48,6 @@ export class DataTables extends Construct {
 
     this.alerts = new Table(this, "Alerts", { ...common, partitionKey: s("alert_id") });
     this.alerts.addGlobalSecondaryIndex({ indexName: "by_incident", partitionKey: s("incident_id") });
+    this.alerts.addGlobalSecondaryIndex({ indexName: "by_senior", partitionKey: s("senior_id"), sortKey: s("created_at") });
   }
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { extractJson } from "../agentCall";
 import { SCAM_TYPES, SIGNAL_TYPES, type ScamType } from "../enums";
 import type { Signal } from "../events";
 
@@ -26,19 +27,6 @@ export class InvalidAgentOutputError extends Error {
   override name = "InvalidAgentOutputError";
 }
 
-/** Pulls the JSON object out of the model's reply, tolerating code fences or a stray sentence around it. */
-function extractJson(text: string): unknown {
-  const unfenced = text.replace(/```(?:json)?/gi, "");
-  const start = unfenced.indexOf("{");
-  const end = unfenced.lastIndexOf("}");
-  if (start === -1 || end <= start) throw new InvalidAgentOutputError("no JSON object in agent reply");
-  try {
-    return JSON.parse(unfenced.slice(start, end + 1));
-  } catch (err) {
-    throw new InvalidAgentOutputError(`agent reply is not valid JSON: ${(err as Error).message}`);
-  }
-}
-
 const normalise = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
 /**
@@ -46,7 +34,7 @@ const normalise = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
  * Any `evidence` that isn't a substring of `sourceText` is dropped, so the agent can't invent quotes.
  */
 export function parseAgentOutput(reply: string, sourceText: string): AgentOutput {
-  const parsed = RawAgentOutput.safeParse(extractJson(reply));
+  const parsed = RawAgentOutput.safeParse(extractJson(reply, (m) => new InvalidAgentOutputError(m)));
   if (!parsed.success) throw new InvalidAgentOutputError(`agent reply has the wrong shape: ${parsed.error.message}`);
   const raw = parsed.data;
   const haystack = normalise(sourceText);

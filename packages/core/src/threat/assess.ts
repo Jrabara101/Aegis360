@@ -1,3 +1,4 @@
+import { callAgent } from "../agentCall";
 import type { ScamType, Severity, ThreatAction } from "../enums";
 import type { Signal } from "../events";
 import { roundScore, severityFromScore, threatActionFor } from "../severity";
@@ -17,10 +18,7 @@ export interface ThreatClassifier {
   classify(input: ClassifierInput, signal: AbortSignal): Promise<string>;
 }
 
-/** Thrown by a classifier when the Bedrock guardrail blocked the input or output. */
-export class GuardrailIntervenedError extends Error {
-  override name = "GuardrailIntervenedError";
-}
+export { GuardrailIntervenedError } from "../agentCall";
 
 export interface AssessOptions {
   classifier?: ThreatClassifier;
@@ -43,36 +41,6 @@ export interface ThreatAssessment {
   fallback_used: boolean;
 }
 
-async function askModel(
-  classifier: ThreatClassifier,
-  input: ClassifierInput,
-  opts: Required<Pick<AssessOptions, "timeoutMs" | "maxAttempts">> & Pick<AssessOptions, "onModelError">,
-): Promise<{ output?: AgentOutput; guardrail: boolean }> {
-  const deadline = Date.now() + opts.timeoutMs;
-  for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("threat classifier timed out")), remaining);
-    try {
-      const reply = await Promise.race([
-        classifier.classify(input, controller.signal),
-        new Promise<never>((_, reject) =>
-          controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }),
-        ),
-      ]);
-      return { output: parseAgentOutput(reply, input.text), guardrail: false };
-    } catch (err) {
-      opts.onModelError?.(err, attempt);
-      if (err instanceof GuardrailIntervenedError) return { guardrail: true };
-      if (controller.signal.aborted) break;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  return { guardrail: false };
-}
-
 /**
  * Scores a transcript. The model's score is used when it answers in time with valid JSON;
  * the keyword score is always computed and acts as a floor. Severity and action come from
@@ -81,12 +49,13 @@ async function askModel(
 export async function assessThreat(input: ClassifierInput, options: AssessOptions = {}): Promise<ThreatAssessment> {
   const keywords = scoreKeywords(input);
 
-  const { output, guardrail } = options.classifier
-    ? await askModel(options.classifier, input, {
-        timeoutMs: options.timeoutMs ?? 3000,
-        maxAttempts: options.maxAttempts ?? 2,
-        onModelError: options.onModelError,
-      })
+  const classifier = options.classifier;
+  const { output, guardrail }: { output?: AgentOutput; guardrail: boolean } = classifier
+    ? await callAgent(
+        (signal) => classifier.classify(input, signal),
+        (reply) => parseAgentOutput(reply, input.text),
+        { timeoutMs: options.timeoutMs ?? 3000, maxAttempts: options.maxAttempts ?? 2, onModelError: options.onModelError },
+      )
     : { output: undefined, guardrail: false };
 
   const score = roundScore(Math.max(output?.threat_score ?? 0, keywords.score));
